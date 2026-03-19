@@ -5,11 +5,11 @@ import { setupApiMocks, getMockSignals } from "./apiMock.js";
  * Runs all Playwright-based UI tests against the student's React app.
  * The app runs inside Docker and is exposed on a dynamic host port.
  *
- * @param {number} hostPort - The host port mapped from container port 3000
+ * @param {string} appUrl - The public URL where the app is served (via E2B or locally)
  * @returns {{ results, logs }} - pass/fail per rubric criteria + log lines
  */
-export default async function runPlaywrightTests(hostPort = 3000) {
-  const APP_URL = `http://127.0.0.1:${hostPort}`;
+export default async function runPlaywrightTests(appUrl) {
+  const APP_URL = appUrl;
 
   const browser = await chromium.launch({ headless: true });
 

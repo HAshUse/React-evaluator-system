@@ -16,8 +16,8 @@ export async function evaluate(params) {
         // step 1: Extract submission 
         const projectPath = await extractSubmission(submission_zip_path)
 
-            // Step 2: Run tests
-        const testResults = await runTests(projectPath);
+        // Step 2: Run tests on E2B Cloud Sandbox
+        const testResults = await runTests(projectPath, submission_zip_path);
 
 
         // Step 3: Score using rubric 

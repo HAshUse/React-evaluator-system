@@ -1,7 +1,8 @@
 {
   "dependencies": {
+    "@e2b/code-interpreter": "^2.3.3",
+    "@fastify/multipart": "^9.4.0",
     "cors": "^2.8.6",
-    "dockerode": "^4.0.9",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "extract-zip": "^2.0.1",

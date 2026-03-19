@@ -1,23 +1,24 @@
-import { spinTestEnvironment, execCommand, execCommandDetached, enforceTimeout } from "../sandbox/dockerManager.js";
+import { spinTestEnvironment, execCommand, execCommandDetached, enforceTimeout } from "../sandbox/e2bManager.js";
 import runPlaywrightTests from "../testing/playwrightTests.js";
 
 /**
  * Runs the full evaluation pipeline:
- * 1. Spin up an isolated Docker container (port 3000 mapped to a free host port)
+ * 1. Spin up an isolated E2B Cloud Sandbox
  * 2. npm install → npm run build → serve the built app
- * 3. Run Playwright UI tests on the host against the mapped port
+ * 3. Run Playwright UI tests against the public E2B URL
  * 4. Return structured test results + full execution logs
  *
- * @param {string} projectPath - Absolute path to the extracted React project
+ * @param {string} projectPath         - Absolute path to the extracted React project (kept for compatibility)
+ * @param {string} submission_zip_path - Absolute path to the uploaded zip file (speedier upload to E2B)
  * @returns {Object} { components, props, state, routing, api, logs }
  */
-export default async function runTests(projectPath) {
+export default async function runTests(projectPath, submission_zip_path) {
 
-  // Spin up sandbox — container port 3000 is bound to a dynamic host port
-  const { container, hostPort } = await spinTestEnvironment(projectPath);
+  // Spin up sandbox — returns the sandbox instance and the public app URL
+  const { sandbox, appUrl } = await spinTestEnvironment(submission_zip_path);
 
-  // Auto-kill after 2 minutes to prevent runaway containers
-  enforceTimeout(container, 120000);
+  // Auto-kill after 2 minutes to prevent runaway processes
+  enforceTimeout(sandbox, 120000);
 
   const executionLogs = [];
 
@@ -25,7 +26,8 @@ export default async function runTests(projectPath) {
     // ── Step 1: Install dependencies ──────────────────────────────────────
     console.log("Installing dependencies inside sandbox...");
     try {
-      const installLogs = await execCommand(container, "npm install --prefer-offline --ignore-scripts 2>&1");
+      // E2B commands implicitly capture stdout/stderr in our e2bManager wrapper
+      const installLogs = await execCommand(sandbox, "npm install --prefer-offline --ignore-scripts 2>&1 || true");
       executionLogs.push("=== npm install ===\n" + installLogs);
     } catch (err) {
       executionLogs.push(`=== npm install FAILED ===\n${err.message}`);
@@ -36,7 +38,7 @@ export default async function runTests(projectPath) {
     console.log("Building React project...");
     let buildLogs;
     try {
-      buildLogs = await execCommand(container, "npm run build 2>&1");
+      buildLogs = await execCommand(sandbox, "npm run build 2>&1");
       executionLogs.push("=== npm run build ===\n" + buildLogs);
       
       // If build outputs obvious error strings, treat as failure
@@ -49,13 +51,13 @@ export default async function runTests(projectPath) {
     }
 
     // Detect build output folder (Vite → /dist, CRA → /build)
-    const buildFolder = await detectBuildFolder(container);
+    const buildFolder = await detectBuildFolder(sandbox);
     executionLogs.push(`=== Build folder detected: ${buildFolder} ===`);
 
     // ── Step 3: Serve built app on container port 3000 ────────────────────
-    console.log(`Serving app from /${buildFolder} on container port 3000...`);
+    console.log(`Serving app from /${buildFolder} on container port 3000 at ${appUrl}...`);
     await execCommandDetached(
-      container,
+      sandbox,
       `python3 -m http.server 3000 --directory ${buildFolder}`
     );
     
@@ -63,8 +65,8 @@ export default async function runTests(projectPath) {
     await new Promise((resolve) => setTimeout(resolve, 5000));
 
     // ── Step 4: Run Playwright tests on the host using the mapped port ────
-    console.log(`Running Playwright tests against http://localhost:${hostPort} ...`);
-    const { results, logs: playwrightLogs } = await runPlaywrightTests(hostPort);
+    console.log(`Running Playwright tests against ${appUrl} ...`);
+    const { results, logs: playwrightLogs } = await runPlaywrightTests(appUrl);
     executionLogs.push("=== Playwright Tests ===\n" + playwrightLogs.join("\n"));
 
     return {
@@ -73,12 +75,12 @@ export default async function runTests(projectPath) {
     };
 
   } catch (error) {
-    // Top-level sandbox failure (e.g. docker crashed)
+    // Top-level sandbox failure (e.g. timeout)
     executionLogs.push(`=== Sandbox Error ===\n${error.message}`);
     return createFailResult(executionLogs, `Fatal execution error: ${error.message}`);
   } finally {
-    // Always stop the container — AutoRemove:true will clean it up
-    try { await container.stop(); } catch { /* already stopped */ }
+    // Always stop the sandbox
+    try { await sandbox.kill(); } catch { /* already stopped */ }
   }
 }
 
@@ -101,12 +103,12 @@ function createFailResult(executionLogs, failMessage) {
  * Detects whether the project built to /dist (Vite) or /build (CRA).
  * Falls back to "dist" if neither is found.
  *
- * @param {object} container - Dockerode container instance
+ * @param {object} sandbox - Sandbox instance
  * @returns {Promise<string>} - "dist" | "build"
  */
-async function detectBuildFolder(container) {
+async function detectBuildFolder(sandbox) {
   const check = await execCommand(
-    container,
+    sandbox,
     "[ -d dist ] && echo dist || ([ -d build ] && echo build || echo dist)"
   );
   return check.trim();
