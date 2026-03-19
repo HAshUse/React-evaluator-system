@@ -1,4 +1,4 @@
-import { generateAIFeedback } from "../ai/feedback.js";
+import { generateAIFeedback, evaluateCodeStructure } from "../ai/feedback.js";
 import logger from "../utils/logger.js";
 
 /**
@@ -42,12 +42,12 @@ const CRITERIA_KEY_MAP = {
  * @param {Object} rubric      - { criteria: [{ name, weight }] }
  * @returns {Promise<Object>}  - Standard evaluation output
  */
-export default async function scoreSubmission(testResults, rubric) {
+export default async function scoreSubmission(testResults, rubric, projectPath) {
   let totalScore = 0;
   const breakdown = {};
   const warnings = [];
 
-  rubric.criteria.forEach((criteria) => {
+  for (const criteria of rubric.criteria) {
     const { name, weight } = criteria;
 
     // Normalize rubric name to a lookup key
@@ -56,20 +56,31 @@ export default async function scoreSubmission(testResults, rubric) {
     if (!lookupKey) {
       warnings.push(`Unknown rubric criterion: "${name}" — skipped`);
       breakdown[name] = 0;
-      return;
+      continue;
     }
 
-    // "structure" cannot be tested via Playwright — give benefit of the doubt
-    const passed = lookupKey === "structure" ? true : Boolean(testResults[lookupKey]);
-    const score = passed ? weight : 0;
+    let passed = Boolean(testResults[lookupKey]);
+    let score = passed ? weight : 0;
+
+    // If it's a structural requirement, ask Groq AI to read the actual code files
+    if (lookupKey === "structure") {
+      logger.info(`Evaluating code structure for ${projectPath}...`);
+      const aiStructureResult = await evaluateCodeStructure(projectPath);
+      score = Math.round(weight * aiStructureResult.scoreMultiplier);
+      passed = score > 0;
+      
+      if (score < weight) {
+        warnings.push(`"${name}" analysis (${score}/${weight} points): ${aiStructureResult.reasoning}`);
+      }
+    } else {
+      if (!passed) {
+        warnings.push(`"${name}" test failed — 0/${weight} points`);
+      }
+    }
 
     breakdown[name] = score;
     totalScore += score;
-
-    if (!passed) {
-      warnings.push(`"${name}" test failed — 0/${weight} points`);
-    }
-  });
+  }
 
   const status = totalScore >= 50 ? "pass" : "fail";
 

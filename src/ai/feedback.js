@@ -4,6 +4,8 @@
 
 import OpenAI from "openai";
 import logger from "../utils/logger.js";
+import fs from "fs/promises";
+import path from "path";
 
 let client = null;
 
@@ -130,4 +132,83 @@ function buildFallbackFeedback(rubric_breakdown, score, warnings) {
   const tip = "Review the failing criteria and ensure your components, state management, and routing are correctly implemented.";
 
   return passedStr + failedStr + tip;
+}
+
+/**
+ * Recursively reads .js and .jsx files from a directory, ignoring node_modules/dist/build.
+ */
+async function readProjectFiles(dir, fileList = []) {
+  const files = await fs.readdir(dir);
+  for (const file of files) {
+    const filePath = path.join(dir, file);
+    const stat = await fs.stat(filePath);
+    if (stat.isDirectory()) {
+      if (file !== 'node_modules' && file !== 'dist' && file !== 'build') {
+        await readProjectFiles(filePath, fileList);
+      }
+    } else if (file.endsWith('.js') || file.endsWith('.jsx')) {
+      fileList.push(filePath);
+    }
+  }
+  return fileList;
+}
+
+/**
+ * Uses Groq AI to read the actual React code files and grade their structure.
+ */
+export async function evaluateCodeStructure(projectPath) {
+  const openai = getClient();
+  if (!openai) return { scoreMultiplier: 1, reasoning: "AI offline, granted full credit." };
+
+  try {
+    const srcDir = path.join(projectPath, "src");
+    let files = [];
+    try {
+      files = await readProjectFiles(srcDir);
+    } catch {
+      try { files = await readProjectFiles(projectPath); } catch { files = []; }
+    }
+    
+    // Limit to 6 main files to save tokens
+    files = files.slice(0, 6);
+    if (files.length === 0) return { scoreMultiplier: 0, reasoning: "No source files found." };
+
+    let codeStr = "";
+    for (const f of files) {
+      const relativePath = path.relative(projectPath, f);
+      const content = await fs.readFile(f, "utf8");
+      codeStr += `\n--- ${relativePath} ---\n${content.slice(0, 2000)}\n`;
+    }
+
+    const prompt = `
+You are an expert React instructor grading the "Code Structure" portion of an assignment.
+Read these main files from the student's submission:
+${codeStr}
+
+Evaluate component breakdown, hook usage, and React best practices.
+Output STRICTLY a JSON object:
+{
+  "scoreMultiplier": <number strictly between 0.0 and 1.0 representing percentage grade>,
+  "reasoning": "<1 sentence explanation on what was good or bad>"
+}
+Do NOT include any markdown or text besides the raw JSON object.
+`.trim();
+
+    const response = await openai.chat.completions.create({
+      model: "llama-3.1-8b-instant",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 150,
+      temperature: 0.1,
+      response_format: { type: "json_object" }
+    });
+
+    const parsed = JSON.parse(response.choices[0].message.content.trim());
+    return {
+      scoreMultiplier: typeof parsed.scoreMultiplier === "number" ? parsed.scoreMultiplier : 1,
+      reasoning: parsed.reasoning || ""
+    };
+  } catch (err) {
+    logger.error("Code structure evaluation failed:", err.message);
+    return { scoreMultiplier: 1, reasoning: "Evaluation errored, defaulting to full credit." };
+  }
 }

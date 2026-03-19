@@ -20,8 +20,8 @@ export async function evaluate(params) {
         const testResults = await runTests(projectPath, submission_zip_path);
 
 
-        // Step 3: Score using rubric 
-        const result = await scoreSubmission(testResults, rubric_json);
+        // Step 3: Score using rubric (pass projectPath for AI structure grading)
+        const result = await scoreSubmission(testResults, rubric_json, projectPath);
 
         return result;
 

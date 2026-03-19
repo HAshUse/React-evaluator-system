@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { evaluate } from "../evaluator/index.js";
+import { addEvaluationJob, evaluationQueue } from "../queue/evaluationQueue.js";
 import logger from "../utils/logger.js";
 import fs from "fs-extra";
 import path from "path";
@@ -80,21 +80,56 @@ export default async function evaluateRoute(fastify, options) {
     log.info("Evaluation request received for assignment:", finalParams.assignment_id);
 
     try {
-      const result = await evaluate(finalParams);
-      log.info("Evaluation complete. Score:", result.score, "| Status:", result.status);
+      // Add the evaluation parameters to the BullMQ processing queue
+      const job = await addEvaluationJob({ 
+        ...finalParams, 
+        is_multipart: request.isMultipart() 
+      });
       
-      // Cleanup temp file if it was an upload
+      log.info(`Queued evaluation job ${job.id}`);
+      
+      return { 
+        success: true, 
+        message: "Evaluation queued. Poll /evaluate/:jobId to check status.",
+        jobId: job.id,
+        status: "pending" 
+      };
+
+    } catch (error) {
+      log.error("Failed to queue evaluation:", error.message);
+      
+      // Cleanup temp file immediately if queueing fails
       if (request.isMultipart() && finalParams.submission_zip_path) {
           try { await fs.remove(finalParams.submission_zip_path); } catch (e) {}
       }
-
-      return { success: true, result };
-
-    } catch (error) {
-      log.error("Evaluation failed:", error.message);
+      
       reply.code(500);
       return { success: false, error: error.message };
     }
+  });
+
+  // GET /evaluate/:jobId
+  // Poll this endpoint to check if an evaluation is finished.
+  fastify.get("/:jobId", async (request, reply) => {
+    const { jobId } = request.params;
+    const job = await evaluationQueue.getJob(jobId);
+    
+    if (!job) {
+      reply.code(404);
+      return { success: false, error: "Job trace not found or already deleted" };
+    }
+    
+    const state = await job.getState();
+    const result = job.returnvalue;
+    const errorReason = job.failedReason;
+    
+    return {
+      success: true,
+      jobId,
+      status: state,
+      result: result || null,
+      error: errorReason || null
+    };
   });
 }
 

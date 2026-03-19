@@ -31,23 +31,22 @@ In Postman, go to the **Body** tab and select **form-data**. Add the following k
 
 *Note: You can still alternatively send a raw JSON request with `submission_zip_path` if the file already exists locally on the server, but `form-data` is the standard approach for external uploads.*
 
-## 3. Expected Responses
+## 3. Asynchronous Queue Processing
 
-### Success (200 OK)
-The response will contain the evaluation results and an overall score.
+The evaluator now uses an asynchronous job queue (BullMQ + Redis) to handle hundreds of students concurrently. This means the `POST /evaluate` endpoint no longer blocks for minutes. Instead, it instantly responds with a highly-scalable `jobId`.
+
+### Queued Successfully (200 OK)
 ```json
 {
   "success": true,
-  "result": {
-    "score": 85,
-    "status": "fail",
-    "details": "..."
-  }
+  "message": "Evaluation queued. Poll /evaluate/:jobId to check status.",
+  "jobId": "1",
+  "status": "pending"
 }
 ```
 
 ### Error (400 Bad Request)
-If the request body is missing required fields or has invalid types.
+If the request body is missing required fields.
 ```json
 {
   "success": false,
@@ -56,11 +55,54 @@ If the request body is missing required fields or has invalid types.
 }
 ```
 
-### Error (500 Internal Server Error)
-If something goes wrong during the evaluation process (e.g., E2B cloud sandbox errors, dependency installation failures).
+## 4. API Endpoint: Poll Job Status
+Use this endpoint to check the live status of an evaluation job and retrieve its final score.
+
+- **Method**: `GET`
+- **URL**: `http://localhost:4000/evaluate/:jobId` (replace `:jobId` with the ID returned from the POST request, e.g., `1`)
+
+### Polling Still Processing (200 OK)
+If the job is still running in the E2B Cloud Sandbox.
 ```json
 {
-  "success": false,
+  "success": true,
+  "jobId": "1",
+  "status": "active",
+  "result": null,
+  "error": null
+}
+```
+
+### Polling Completed (200 OK)
+When the evaluation finishes, the full grade is available inside `result`.
+```json
+{
+  "success": true,
+  "jobId": "1",
+  "status": "completed",
+  "result": {
+    "score": 85,
+    "rubric_breakdown": {
+      "Functional Requirements": 60,
+      "Code Structure": 25
+    },
+    "feedback": "Great work overall! Take note of hook dependencies...",
+    "warnings": [],
+    "execution_logs": "=== npm run build ===\n...",
+    "status": "pass"
+  },
+  "error": null
+}
+```
+
+### Polling System Error (200 OK)
+If the E2B sandbox crashed entirely (e.g. timeout or fatal Docker startup error).
+```json
+{
+  "success": true,
+  "jobId": "1",
+  "status": "failed",
+  "result": null,
   "error": "Detailed error message here"
 }
 ```
