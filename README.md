@@ -140,6 +140,11 @@ Create a `.env` file in the root directory and ensure you configure your API key
 ```ini
 E2B_API_KEY=your_e2b_key_here
 GROQ_API_KEY=your_groq_key_here
+
+# Optional: Configurable endpoints and ports
+PORT=4000
+BASE_URL=http://localhost:4000
+GROQ_BASE_URL=https://api.groq.com/openai/v1
 ```
 
 ### 4. Start the Server
@@ -148,6 +153,32 @@ GROQ_API_KEY=your_groq_key_here
 npm start
 ```
 *The server will boot up and listen on port **4000** by default.*
+
+---
+
+## How to Zip Projects for Submission
+
+Before uploading, ensure your React projects are zipped correctly so the evaluator can extract and build them.
+
+**Important Zip Requirements:**
+- The `.zip` file should contain the project files (like `package.json`, `src/`, `public/`) at the root of the zip, OR inside a single top-level folder.
+- Do **not** include the `node_modules/` folder, as it makes the upload huge and dependencies will be freshly installed by the sandbox.
+
+### On Windows
+1. Open File Explorer and navigate to your React project folder.
+2. Select all files and folders inside your project (or just the root project folder). **Note:** Ensure `node_modules` is excluded or deleted first.
+3. Right-click > **Compress to ZIP file** (Windows 11) or **Send to** > **Compressed (zipped) folder** (Windows 10).
+
+### On macOS
+1. Open Finder and navigate to your React project folder.
+2. Select the files/folders (excluding `node_modules`).
+3. Right-click (or Control-click) and select **Compress...**.
+
+### Using Command Line (Mac/Linux/Windows via Git Bash)
+Navigate to your project folder and run:
+```bash
+zip -r submission.zip . -x "node_modules/*"
+```
 
 ---
 

@@ -1,5 +1,8 @@
 import path from "path";
 import fetch from "node-fetch";
+import "dotenv/config";
+
+const BASE_URL = process.env.BASE_URL || "http://localhost:4000";
 
 const RUN_LOCAL = true; // Use URL if server running, else function directly
 
@@ -23,10 +26,10 @@ async function runLocalTest() {
     rubric_json: rubric
   };
 
-  console.log("Sending evaluation request to http://localhost:4000/evaluate ...");
+  console.log(`Sending evaluation request to ${BASE_URL}/evaluate ...`);
   
   try {
-    const response = await fetch("http://localhost:4000/evaluate", {
+    const response = await fetch(`${BASE_URL}/evaluate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
@@ -39,7 +42,7 @@ async function runLocalTest() {
 
   } catch (err) {
     console.error("Test Request Failed:", err.message);
-    console.log("Is the evaluator server running on port 4000? (npm start)");
+    console.log(`Is the evaluator server running on ${BASE_URL}? (npm start)`);
   }
 }
 

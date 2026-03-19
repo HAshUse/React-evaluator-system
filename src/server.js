@@ -18,8 +18,9 @@ fastify.register(evaluatorModule)
 
 const start = async () => {
     try {
-        await fastify.listen({port: 4000})
-        console.log("Evaluator server running on port 4000")
+        const port = process.env.PORT || 4000;
+        await fastify.listen({port})
+        console.log(`Evaluator server running on port ${port}`)
     }catch(err) {
         fastify.log.error(err)
         process.exit(1)
