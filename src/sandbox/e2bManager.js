@@ -27,19 +27,28 @@ export async function spinTestEnvironment(zipPath) {
   // The React app serves on port 3000
   const hostUrl = sandbox.getHost(3000);
   
+  // Find the exact directory containing package.json in case it is inside a nested folder (GitHub exports)
+  const findCmd = await sandbox.commands.run("find /home/user/app -maxdepth 2 -name 'package.json' | head -n 1");
+  let projectDir = "/home/user/app";
+  if (!findCmd.error && findCmd.stdout.trim()) {
+    projectDir = findCmd.stdout.trim().replace(/\/package\.json$/, "");
+    console.log("Detected project directory with package.json:", projectDir);
+  }
+
   // Note: Playwright can navigate to this public URL
-  return { sandbox, appUrl: `https://${hostUrl}` };
+  return { sandbox, appUrl: `https://${hostUrl}`, projectDir };
 }
 
 /**
  * Runs a shell command inside the sandbox and returns stdout+stderr as a string.
  * @param {unknown} sandbox   - E2B Sandbox instance
  * @param {string} command    - Shell command to run
+ * @param {string} cwd        - Working directory inside the sandbox
  * @returns {Promise<string>}
  */
-export async function execCommand(sandbox, command) {
-  // We run all commands inside the extracted directory
-  const result = await sandbox.commands.run(command, { cwd: "/home/user/app" });
+export async function execCommand(sandbox, command, cwd = "/home/user/app") {
+  // We run all commands inside the extracted directory with a generous 5-minute timeout
+  const result = await sandbox.commands.run(command, { cwd, timeoutMs: 300000 });
   
   if (result.error) {
     throw new Error(result.error.message || result.stderr || "Command execution failed");
@@ -53,9 +62,10 @@ export async function execCommand(sandbox, command) {
  * this execution session closes (crucial for long-running servers).
  * @param {unknown} sandbox - E2B Sandbox instance
  * @param {string} command - Shell command to run
+ * @param {string} cwd - Working directory inside the sandbox
  */
-export async function execCommandDetached(sandbox, command) {
-  await sandbox.commands.run(command, { cwd: "/home/user/app", background: true });
+export async function execCommandDetached(sandbox, command, cwd = "/home/user/app") {
+  await sandbox.commands.run(command, { cwd, background: true });
 }
 
 /**

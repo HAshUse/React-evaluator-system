@@ -20,7 +20,7 @@ const rubricSchema = z.object({
 const evaluationSchema = z.object({
   assignment_id:       z.string().min(1),
   student_id:          z.string().min(1),
-  submission_zip_path: z.string().optional(),
+  submission_zip_path: z.union([z.string(), z.array(z.string())]).optional(),
   rubric_json:         rubricSchema,
   evaluator_type:      z.string().optional(),
   reference_project:   z.string().optional(),
@@ -33,14 +33,14 @@ export default async function evaluateRoute(fastify, options) {
 
     if (request.isMultipart()) {
       const parts = request.parts();
-      let uploadedFilePath = null;
+      let uploadedFilePaths = [];
 
       for await (const part of parts) {
         if (part.type === 'file' && part.fieldname === 'submission_file') {
           // Save uploaded file to a temp location
           const tempFile = tmp.fileSync({ postfix: '.zip', keep: true });
           await pipeline(part.file, fs.createWriteStream(tempFile.name));
-          uploadedFilePath = tempFile.name;
+          uploadedFilePaths.push(tempFile.name);
 
         } else if (part.type === 'field') {
           // Parse JSON fields
@@ -56,8 +56,8 @@ export default async function evaluateRoute(fastify, options) {
         }
       }
 
-      if (uploadedFilePath) {
-        params.submission_zip_path = uploadedFilePath;
+      if (uploadedFilePaths.length > 0) {
+        params.submission_zip_path = uploadedFilePaths.length === 1 ? uploadedFilePaths[0] : uploadedFilePaths;
       }
     } else {
       params = request.body;
@@ -80,27 +80,39 @@ export default async function evaluateRoute(fastify, options) {
     log.info("Evaluation request received for assignment:", finalParams.assignment_id);
 
     try {
-      // Add the evaluation parameters to the BullMQ processing queue
-      const job = await addEvaluationJob({ 
-        ...finalParams, 
-        is_multipart: request.isMultipart() 
-      });
-      
-      log.info(`Queued evaluation job ${job.id}`);
+      const jobIds = [];
+      const paths = Array.isArray(finalParams.submission_zip_path) 
+        ? finalParams.submission_zip_path 
+        : [finalParams.submission_zip_path].filter(Boolean);
+
+      // Loop over the files (or at least run once if no files but valid local path is provided)
+      for (let i = 0; i < Math.max(paths.length, 1); i++) {
+        const currentPath = paths[i] || null;
+        const jobParams = { ...finalParams, is_multipart: request.isMultipart() };
+        if (currentPath) jobParams.submission_zip_path = currentPath;
+
+        const job = await addEvaluationJob(jobParams);
+        jobIds.push(job.id);
+        log.info(`Queued evaluation job ${job.id}`);
+      }
       
       return { 
         success: true, 
         message: "Evaluation queued. Poll /evaluate/:jobId to check status.",
-        jobId: job.id,
+        jobId: jobIds[0], // primary job ID for backwards compatibility
+        jobIds: jobIds,   // array of all job IDs for batch tracking
         status: "pending" 
       };
 
     } catch (error) {
       log.error("Failed to queue evaluation:", error.message);
       
-      // Cleanup temp file immediately if queueing fails
+      // Cleanup all temp files if queueing fails completely
       if (request.isMultipart() && finalParams.submission_zip_path) {
-          try { await fs.remove(finalParams.submission_zip_path); } catch (e) {}
+          const pathsToClean = Array.isArray(finalParams.submission_zip_path) ? finalParams.submission_zip_path : [finalParams.submission_zip_path];
+          for (const p of pathsToClean) {
+            try { await fs.remove(p); } catch (e) {}
+          }
       }
       
       reply.code(500);

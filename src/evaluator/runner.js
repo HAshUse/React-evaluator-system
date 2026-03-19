@@ -14,11 +14,11 @@ import runPlaywrightTests from "../testing/playwrightTests.js";
  */
 export default async function runTests(projectPath, submission_zip_path) {
 
-  // Spin up sandbox — returns the sandbox instance and the public app URL
-  const { sandbox, appUrl } = await spinTestEnvironment(submission_zip_path);
+  // Spin up sandbox — returns the sandbox instance, the public app URL, and the actual project directory
+  const { sandbox, appUrl, projectDir } = await spinTestEnvironment(submission_zip_path);
 
-  // Auto-kill after 2 minutes to prevent runaway processes
-  enforceTimeout(sandbox, 120000);
+  // Auto-kill after 5 minutes to prevent runaway processes
+  enforceTimeout(sandbox, 300000);
 
   const executionLogs = [];
 
@@ -27,7 +27,7 @@ export default async function runTests(projectPath, submission_zip_path) {
     console.log("Installing dependencies inside sandbox...");
     try {
       // E2B commands implicitly capture stdout/stderr in our e2bManager wrapper
-      const installLogs = await execCommand(sandbox, "npm install --prefer-offline --ignore-scripts 2>&1 || true");
+      const installLogs = await execCommand(sandbox, "npm install --prefer-offline --ignore-scripts 2>&1 || true", projectDir);
       executionLogs.push("=== npm install ===\n" + installLogs);
     } catch (err) {
       executionLogs.push(`=== npm install FAILED ===\n${err.message}`);
@@ -38,7 +38,7 @@ export default async function runTests(projectPath, submission_zip_path) {
     console.log("Building React project...");
     let buildLogs;
     try {
-      buildLogs = await execCommand(sandbox, "npm run build 2>&1");
+      buildLogs = await execCommand(sandbox, "npm run build 2>&1", projectDir);
       executionLogs.push("=== npm run build ===\n" + buildLogs);
       
       // If build outputs obvious error strings, treat as failure
@@ -51,14 +51,15 @@ export default async function runTests(projectPath, submission_zip_path) {
     }
 
     // Detect build output folder (Vite → /dist, CRA → /build)
-    const buildFolder = await detectBuildFolder(sandbox);
+    const buildFolder = await detectBuildFolder(sandbox, projectDir);
     executionLogs.push(`=== Build folder detected: ${buildFolder} ===`);
 
     // ── Step 3: Serve built app on container port 3000 ────────────────────
     console.log(`Serving app from /${buildFolder} on container port 3000 at ${appUrl}...`);
     await execCommandDetached(
       sandbox,
-      `python3 -m http.server 3000 --directory ${buildFolder}`
+      `python3 -m http.server 3000 --directory ${buildFolder}`, 
+      projectDir
     );
     
     // Give the server a moment to start before running Playwright
@@ -104,12 +105,14 @@ function createFailResult(executionLogs, failMessage) {
  * Falls back to "dist" if neither is found.
  *
  * @param {object} sandbox - Sandbox instance
+ * @param {string} projectDir - The directory where the project is built
  * @returns {Promise<string>} - "dist" | "build"
  */
-async function detectBuildFolder(sandbox) {
+async function detectBuildFolder(sandbox, projectDir = "/home/user/app") {
   const check = await execCommand(
     sandbox,
-    "[ -d dist ] && echo dist || ([ -d build ] && echo build || echo dist)"
+    "[ -d dist ] && echo dist || ([ -d build ] && echo build || echo dist)",
+    projectDir
   );
   return check.trim();
 }
