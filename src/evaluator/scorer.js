@@ -68,7 +68,7 @@ export default async function scoreSubmission(testResults, rubric, projectPath) 
       const aiStructureResult = await evaluateCodeStructure(projectPath);
       score = Math.round(weight * aiStructureResult.scoreMultiplier);
       passed = score > 0;
-      
+
       if (score < weight) {
         warnings.push(`"${name}" analysis (${score}/${weight} points): ${aiStructureResult.reasoning}`);
       }

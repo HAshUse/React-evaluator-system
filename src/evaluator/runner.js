@@ -63,7 +63,7 @@ export default async function runTests(projectPath, submission_zip_path) {
     );
     
     // Give the server a moment to start before running Playwright
-    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // ── Step 4: Run Playwright tests on the host using the mapped port ────
     console.log(`Running Playwright tests against ${appUrl} ...`);

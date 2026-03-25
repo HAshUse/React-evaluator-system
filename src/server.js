@@ -4,7 +4,8 @@ import multipart from "@fastify/multipart";
 import evaluatorModule from "./modules/evaluateModule.js"
 
 const fastify = Fastify({
-    logger: true
+    logger: true,
+    maxParamLength: 2000
 })
 
 fastify.register(multipart, {

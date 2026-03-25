@@ -5,6 +5,7 @@ import fs from "fs-extra";
 import path from "path";
 import tmp from "tmp";
 import { pipeline } from "stream/promises";
+import AdmZip from "adm-zip";
 
 
 // ── Input Validation Schema ──────────────────────────────────────────────────
@@ -66,7 +67,7 @@ export default async function evaluateRoute(fastify, options) {
     // Validate request body with Zod
     const parsed = evaluationSchema.safeParse(params);
 
-    if (!parsed.success || (!params.submission_zip_path && !request.isMultipart())) {
+    if (!parsed.success || !params.submission_zip_path) {
       reply.code(400);
       return {
         success: false,
@@ -85,9 +86,48 @@ export default async function evaluateRoute(fastify, options) {
         ? finalParams.submission_zip_path 
         : [finalParams.submission_zip_path].filter(Boolean);
 
-      // Loop over the files (or at least run once if no files but valid local path is provided)
-      for (let i = 0; i < Math.max(paths.length, 1); i++) {
-        const currentPath = paths[i] || null;
+      // Validate that provided zip files contain a package.json
+      const validPaths = [];
+      const validationErrors = [];
+
+      for (const zipPath of paths) {
+        if (zipPath) {
+          try {
+            const zip = new AdmZip(zipPath);
+            const zipEntries = zip.getEntries();
+            const hasPackageJson = zipEntries.some(entry => {
+              const parts = entry.entryName.split('/');
+              return !entry.isDirectory && parts[parts.length - 1] === 'package.json';
+            });
+            
+            if (!hasPackageJson) {
+              validationErrors.push({ file: zipPath, error: "Missing package.json file" });
+              try { await fs.remove(zipPath); } catch (e) {}
+            } else {
+              validPaths.push(zipPath);
+            }
+          } catch (e) {
+            validationErrors.push({ file: zipPath, error: "Invalid zip file format" });
+            try { await fs.remove(zipPath); } catch (e) {}
+          }
+        }
+      }
+
+      if (paths.length > 0 && validPaths.length === 0) {
+        reply.code(400);
+        return {
+          success: false,
+          error: "Invalid submissions",
+          details: validationErrors
+        };
+      }
+
+      const pathsToProcess = paths.length > 0 ? validPaths : [];
+      const loopCount = Math.max(pathsToProcess.length, paths.length === 0 ? 1 : 0);
+
+      // Loop over the valid files (or at least run once if no files but valid local path is provided)
+      for (let i = 0; i < loopCount; i++) {
+        const currentPath = pathsToProcess[i] || null;
         const jobParams = { ...finalParams, is_multipart: request.isMultipart() };
         if (currentPath) jobParams.submission_zip_path = currentPath;
 
@@ -101,7 +141,8 @@ export default async function evaluateRoute(fastify, options) {
         message: "Evaluation queued. Poll /evaluate/:jobId to check status.",
         jobId: jobIds[0], // primary job ID for backwards compatibility
         jobIds: jobIds,   // array of all job IDs for batch tracking
-        status: "pending" 
+        status: "pending",
+        errors: validationErrors.length > 0 ? validationErrors : undefined
       };
 
     } catch (error) {
@@ -123,24 +164,54 @@ export default async function evaluateRoute(fastify, options) {
   // GET /evaluate/:jobId
   // Poll this endpoint to check if an evaluation is finished.
   fastify.get("/:jobId", async (request, reply) => {
-    const { jobId } = request.params;
-    const job = await evaluationQueue.getJob(jobId);
-    
-    if (!job) {
-      reply.code(404);
-      return { success: false, error: "Job trace not found or already deleted" };
+    const jobIds = request.params.jobId.split(',');
+
+    if (jobIds.length === 1) {
+      const jobId = jobIds[0];
+      const job = await evaluationQueue.getJob(jobId);
+      
+      if (!job) {
+        reply.code(404);
+        return { success: false, error: "Job trace not found or already deleted" };
+      }
+      
+      const state = await job.getState();
+      const result = job.returnvalue;
+      const errorReason = job.failedReason;
+      
+      return {
+        success: true,
+        jobId,
+        status: state,
+        result: result || null,
+        error: errorReason || null
+      };
     }
-    
-    const state = await job.getState();
-    const result = job.returnvalue;
-    const errorReason = job.failedReason;
-    
+
+    const batchResults = [];
+    for (const id of jobIds) {
+      const trimmedId = id.trim();
+      if (!trimmedId) continue;
+      
+      const job = await evaluationQueue.getJob(trimmedId);
+      if (!job) {
+        batchResults.push({ jobId: trimmedId, success: false, error: "Not found" });
+        continue;
+      }
+      
+      const state = await job.getState();
+      batchResults.push({
+        success: true,
+        jobId: trimmedId,
+        status: state,
+        result: job.returnvalue || null,
+        error: job.failedReason || null
+      });
+    }
+
     return {
       success: true,
-      jobId,
-      status: state,
-      result: result || null,
-      error: errorReason || null
+      results: batchResults
     };
   });
 }

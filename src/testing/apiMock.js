@@ -92,13 +92,18 @@ export async function setupApiMocks(page) {
       new RegExp(mock.pattern.replace(/\*\*/g, ".*")).test(url)
     );
 
-    const responseBody = matched ? matched.response : FALLBACK_RESPONSE;
+    // If no specific mock matches, let the real network request through!
+    // Students might be querying real external APIs (e.g. data.gov.in, OpenWeather, etc.)
+    if (!matched) {
+      return route.continue();
+    }
+
     interceptedUrls.push(url);
 
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(responseBody),
+      body: JSON.stringify(matched.response),
     });
   });
 

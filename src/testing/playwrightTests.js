@@ -31,7 +31,8 @@ export default async function runPlaywrightTests(appUrl) {
 
     // Initial load
     logs.push("Navigating to app...");
-    await page.goto(APP_URL, { waitUntil: "networkidle", timeout: 15000 });
+    await page.goto(APP_URL, { waitUntil: "domcontentloaded", timeout: 8000 });
+    await page.waitForTimeout(500); // Give React a moment to hydrate
 
     // ─── Test 1: Component Rendering ────────────────────────────────────────
     try {
@@ -65,7 +66,7 @@ export default async function runPlaywrightTests(appUrl) {
     // ─── Test 5: API Integration (Check DOM after initial load) ──────────────
     try {
       logs.push(`[api] Intercepted ${interceptedUrls.length} request(s): ${interceptedUrls.join(", ") || "none"}`);
-      await page.waitForTimeout(500); // UI settles after fetch
+      await page.waitForTimeout(200); // UI settles after fetch
 
       const bodyContent = await page.textContent("body");
       const mockSignals = getMockSignals();
@@ -82,10 +83,26 @@ export default async function runPlaywrightTests(appUrl) {
       const initialUrl = page.url();
       const initialContent = await page.textContent("body");
 
-      const navLink = await page.$("nav a, [role='navigation'] a, a[href^='/'], a[href^='#']");
+      const navLinks = await page.$$("nav a, [role='navigation'] a, a[href^='/'], a[href^='#']");
+      let clicked = false;
 
-      if (navLink) {
-        await navLink.click();
+      for (const link of navLinks) {
+        const href = await link.getAttribute("href");
+        // Try to click a link that actually goes somewhere else, not just the homepage
+        if (href && href !== "/" && href !== "#") {
+          await link.click();
+          clicked = true;
+          break;
+        }
+      }
+
+      // Fallback safely to any link
+      if (!clicked && navLinks.length > 0) {
+        await navLinks[navLinks.length - 1].click();
+        clicked = true;
+      }
+
+      if (clicked) {
         await page.waitForTimeout(800);
 
         const newUrl = page.url();
@@ -104,26 +121,37 @@ export default async function runPlaywrightTests(appUrl) {
 
     // ─── Test 3: State Updates (Do this last as it Mutates UI) ───────────────
     try {
-      const domBefore = await page.evaluate(() => document.body.innerHTML);
-
       const interactiveSelector = "button, input[type='checkbox'], input[type='radio'], [role='button'], [role='switch']";
-      const interactiveEl = await page.$(interactiveSelector);
+      
+      // Wait for at least one interactive element to appear (e.g. if the page is currently "Loading...")
+      await page.waitForSelector(`${interactiveSelector}, input[type='text'], input[type='search'], textarea`, { timeout: 3000 }).catch(() => {});
 
-      if (interactiveEl) {
-        await interactiveEl.click();
-        await page.waitForTimeout(500);
+      const interactiveEls = await page.$$(interactiveSelector);
+
+      let stateChanged = false;
+      for (const el of interactiveEls.slice(0, 3)) { // try up to 3 elements to find a state change
+        const domBefore = await page.evaluate(() => document.body.innerHTML);
+        await el.click({ force: true }).catch(() => {});
+        await page.waitForTimeout(300);
         const domAfter = await page.evaluate(() => document.body.innerHTML);
-        results.state = domBefore !== domAfter;
-        logs.push(`[state] DOM changed after click: ${domBefore !== domAfter}`);
+        if (domBefore !== domAfter) {
+          stateChanged = true;
+          break;
+        }
+      }
+
+      if (stateChanged) {
+        results.state = true;
+        logs.push(`[state] DOM changed after click: true`);
       } else {
         const inputEl = await page.$("input[type='text'], input[type='search'], textarea");
         if (inputEl) {
           const domBeforeInput = await page.evaluate(() => document.body.innerHTML);
-          await inputEl.type("test");
-          await page.waitForTimeout(500);
+          await inputEl.fill("test").catch(() => {}); // .fill is more robust than .type
+          await page.waitForTimeout(300);
           const domAfterInput = await page.evaluate(() => document.body.innerHTML);
           results.state = domBeforeInput !== domAfterInput;
-          logs.push(`[state] DOM changed after typing: ${domBeforeInput !== domAfterInput}`);
+          logs.push(`[state] DOM changed after typing/filling: ${domBeforeInput !== domAfterInput}`);
         } else {
           logs.push("[state] No interactive elements found to trigger state");
         }

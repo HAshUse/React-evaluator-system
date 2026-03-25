@@ -168,7 +168,7 @@ export async function evaluateCodeStructure(projectPath) {
     } catch {
       try { files = await readProjectFiles(projectPath); } catch { files = []; }
     }
-    
+
     // Limit to 6 main files to save tokens
     files = files.slice(0, 6);
     if (files.length === 0) return { scoreMultiplier: 0, reasoning: "No source files found." };

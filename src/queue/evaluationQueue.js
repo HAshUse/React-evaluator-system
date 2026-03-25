@@ -14,6 +14,10 @@ export const evaluationQueue = {
   }
 };
 
+const pendingJobs = [];
+let activeCount = 0;
+const CONCURRENCY_LIMIT = 5;
+
 /**
  * Adds an evaluation job to the in-memory queue and begins processing
  * @param {Object} params - The evaluation parameters
@@ -35,13 +39,35 @@ export async function addEvaluationJob(params) {
   
   job.state = 'pending';
   jobs.set(jobId, job);
+  pendingJobs.push(job);
   
-  logger.info(`Added job ${jobId} to the in-memory queue.`);
+  logger.info(`Added job ${jobId} to the in-memory queue (Pending: ${pendingJobs.length}, Active: ${activeCount}).`);
   
-  // Kick off background processing without blocking the API response
-  processJob(job);
+  // Try to start processing queued jobs
+  processQueue();
   
   return job;
+}
+
+/**
+ * Checks the queue and processing limits to start jobs
+ */
+function processQueue() {
+  if (activeCount >= CONCURRENCY_LIMIT || pendingJobs.length === 0) {
+    return;
+  }
+  
+  activeCount++;
+  const nextJob = pendingJobs.shift();
+  
+  // Run asynchronously and trigger the queue again when done
+  processJob(nextJob).finally(() => {
+    activeCount--;
+    processQueue();
+  });
+  
+  // Try to spawn another worker if we are still under the limit
+  processQueue();
 }
 
 /**
